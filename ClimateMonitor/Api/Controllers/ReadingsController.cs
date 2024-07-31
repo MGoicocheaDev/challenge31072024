@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using ClimateMonitor.Services;
 using ClimateMonitor.Services.Models;
+using System.Text.RegularExpressions;
+using ClimateMonitor.Exceptions;
 
 namespace ClimateMonitor.Api.Controllers;
 
@@ -34,16 +36,41 @@ public class ReadingsController : ControllerBase
     /// <param name="deviceReadingRequest">Sensor information and extra metadata from device.</param>
     [HttpPost("evaluate")]
     public ActionResult<IEnumerable<Alert>> EvaluateReading(
-        string deviceSecret,
+        [FromHeader(Name = "x-device-shared-secret")]string deviceSecret,
         [FromBody] DeviceReadingRequest deviceReadingRequest)
     {
-        if (!_secretValidator.ValidateDeviceSecret(deviceSecret))
+        try
+        {
+            string pattern = @"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$";
+            Regex regex = new Regex(pattern);
+
+            if (!regex.IsMatch(deviceReadingRequest.FirmwareVersion))
+            {
+                throw new VersionException();
+            }
+
+            
+            if (!_secretValidator.ValidateDeviceSecret(deviceSecret))
+            {
+                throw new DeviceException();
+            }
+
+            return Ok(_alertService.GetAlerts(deviceReadingRequest));
+        }
+        catch (VersionException vEx)
+        {
+            var errors = new Dictionary<string, string[]>();
+            var messages = new List<string>();
+            messages.Add(vEx.Message);
+            errors.Add("FirmwareVersion", messages.ToArray());
+            return BadRequest(new ValidationProblemDetails(errors));
+        }
+        catch(DeviceException dEx)
         {
             return Problem(
-                detail: "Device secret is not within the valid range.",
-                statusCode: StatusCodes.Status401Unauthorized);
+                    detail: dEx.Message,
+                    statusCode: StatusCodes.Status401Unauthorized);
         }
 
-        return Ok(_alertService.GetAlerts(deviceReadingRequest));
     }
 }
